@@ -104,7 +104,14 @@ def add_expense(amount, category, description, date=None):
             raise e
 
 def summarize(p_type, month_num=None):
-    year_month = f"{datetime.now().year}-{month_num}" if month_num else datetime.now().strftime('%Y-%m')
+    # Support both "MM" (current year) and "YYYY-MM" formats
+    if month_num:
+        if len(month_num) == 7 and '-' in month_num: # Format YYYY-MM
+             year_month = month_num
+        else:
+             year_month = f"{datetime.now().year}-{month_num}"
+    else:
+        year_month = datetime.now().strftime('%Y-%m')
     
     with get_db() as conn:
         conn.execute("BEGIN IMMEDIATE")

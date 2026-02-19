@@ -109,5 +109,29 @@ class TestFinanceTracker(unittest.TestCase):
         self.assertEqual(row[1], 10, "Should have 10 entries")
         self.assertEqual(row[0], 100.0, "Total amount should be 100.0")
 
+    def test_backdated_summary(self):
+        """
+        Verify that adding an expense for a past month and summarizing it 
+        correctly updates that month's budget and savings.
+        """
+        # Add expense for Jan 2025
+        past_date = "2025-01-15"
+        add_expense(1000.0, "History", "Ancient Debt", date=past_date)
+        
+        # Summarize Jan 2025
+        # Note: summarize argument for month can now be YYYY-MM
+        result = summarize('monthly', month_num="2025-01")
+        
+        self.assertEqual(result['month'], "2025-01")
+        self.assertEqual(result['spent'], 1000.0)
+        
+        # Check if it persisted in budgets table
+        conn = sqlite3.connect(DB_NAME)
+        row = conn.execute("SELECT * FROM budgets WHERE month_key = ?", ("2025-01",)).fetchone()
+        conn.close()
+        
+        self.assertIsNotNone(row)
+        self.assertEqual(row[3], 50000.0 - 1000.0) # default limit - spent = savings
+
 if __name__ == '__main__':
     unittest.main()

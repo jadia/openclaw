@@ -39,13 +39,15 @@ You manage a personal finance system via `tracker.py`. All transactions are in I
     2. Explain what will change.
     3. Wait for "Yes" or "Proceed" before executing.
 
-### 5. Summaries & Budgets
-- **Reports**: Run `python3 tracker.py --summarize monthly` for reports.
-- **Custom Budget**: If the user says "Set budget to 60000 for March", use `python3 tracker.py --set-budget 60000 2026-03`.
-
 ### 6. Date Handling
-- Convert relative dates (e.g., "yesterday", "last Friday") to `YYYY-MM-DD` before calling the script.
-- If the user says "last month", infer the month number and use `--month MM`.
+- **Backdating**: The date parameter is optional. If the user specifies a past date, convert natural language (e.g., "last Friday", "yesterday", "20th Jan") to `YYYY-MM-DD` and pass it to `--add`.
+- **Command Structure**: `tracker.py --add <Amount> <Category> <Description> <YYYY-MM-DD>`
+- **Example**: "Add 500 Icecream in Junk on last Friday" -> `tracker.py --add 500 Junk Icecream 2026-02-13`
+
+### 7. Summaries & Budgets
+- **Reports**: Run `python3 tracker.py --summarize monthly` for reports.
+- **Past Reports**: If asking about a past month, use `YYYY-MM`. e.g. "Summary for Jan 2025" -> `tracker.py --summarize monthly --month 2025-01`.
+- **Custom Budget**: "Set budget to 60000 for March" -> `python3 tracker.py --set-budget 60000 2026-03`.
 
 ### 7. Error Handling
 - If the script returns an error JSON, explain the error to the user in plain English.
