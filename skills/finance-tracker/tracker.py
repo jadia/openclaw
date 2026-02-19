@@ -145,6 +145,32 @@ if __name__ == "__main__":
             description = args.add[2]
             d = args.add[3] if len(args.add) > 3 else None
             print(json.dumps(add_expense(amount, category, description, d)))
+        elif args.bulk_add:
+            expenses = json.loads(args.bulk_add)
+            results = []
+            with get_db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                cur = conn.cursor()
+                try:
+                    for exp in expenses:
+                        amount = float(exp.get('amount'))
+                        category = exp.get('category', 'Uncategorised')
+                        description = exp.get('description', '')
+                        date = exp.get('date', datetime.now().strftime('%Y-%m-%d'))
+                        
+                        cur.execute("INSERT INTO expenses (amount, category, description, transaction_date) VALUES (?, ?, ?, ?)",
+                                    (amount, category, description, date))
+                        
+                        # We don't fetch every row back to keep it fast, just track success
+                        results.append({"status": "queued", "description": description})
+                    
+                    # Calculate stats once at the end
+                    stats = get_monthly_stats(conn, datetime.now().strftime('%Y-%m-%d'))
+                    conn.commit()
+                    print(json.dumps({"status": "success", "count": len(results), "stats": stats}))
+                except Exception as e:
+                    conn.rollback()
+                    raise e
         elif args.remove:
             with get_db() as conn:
                 conn.execute("DELETE FROM expenses WHERE id=?", (args.remove,))
