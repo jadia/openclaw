@@ -1,6 +1,7 @@
 ---
 name: finance-tracker
 description: Proactive finance manager with SQL access and 80% budget alerts.
+user-invocable: true
 ---
 
 # Finance Tracker Instructions

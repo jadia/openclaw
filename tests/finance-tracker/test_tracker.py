@@ -17,8 +17,12 @@ class TestFinanceTracker(unittest.TestCase):
         # Clean up any existing files first
         if os.path.exists(DB_NAME):
             os.remove(DB_NAME)
+        
+        # Backup existing config check
         if os.path.exists(CONFIG_FILE):
-            os.remove(CONFIG_FILE)
+            os.rename(CONFIG_FILE, CONFIG_FILE + ".bak")
+             
+        # Create fresh config
         init_db()
 
     def tearDown(self):
@@ -28,8 +32,13 @@ class TestFinanceTracker(unittest.TestCase):
                 os.remove(DB_NAME)
             except OSError:
                 pass # Already deleted or locked
+        
         if os.path.exists(CONFIG_FILE):
             os.remove(CONFIG_FILE)
+            
+        # Restore original config
+        if os.path.exists(CONFIG_FILE + ".bak"):
+            os.rename(CONFIG_FILE + ".bak", CONFIG_FILE)
 
     def test_add_expense(self):
         """Verify that an expense can be added and is returned correctly."""
