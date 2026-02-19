@@ -1,0 +1,7 @@
+name: finance-tracker
+version: 0.1.0
+description: A personal finance tracker with budget alerts and SQL backend.
+entry_point: tracker.py
+language: python
+dependencies:
+  - sqlite3

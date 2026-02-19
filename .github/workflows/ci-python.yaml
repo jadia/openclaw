@@ -1,0 +1,40 @@
+name: Python Skills CI
+
+on:
+  push:
+    paths:
+      - 'skills/**/actions/**/*.py'
+      - 'skills/**/*.py'
+      - 'tests/**/*.py'
+
+jobs:
+  test-python-skills:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install Dependencies & Run Tests
+        run: |
+          # Find all test directories inside tests/
+          for test_dir in tests/*/; do
+            if [ -d "$test_dir" ]; then
+              skill_name=$(basename "$test_dir")
+              echo "Testing skill: $skill_name"
+              
+              # Check if requirements.txt exists for the test suite
+              if [ -f "$test_dir/requirements.txt" ]; then
+                pip install -r "$test_dir/requirements.txt"
+              fi
+              
+              # Run pytest, adding the skill's directory to PYTHONPATH
+              export PYTHONPATH=$PYTHONPATH:$(pwd)/skills/$skill_name
+              
+              # Run tests
+              pytest "$test_dir" || exit 1
+            fi
+          done
