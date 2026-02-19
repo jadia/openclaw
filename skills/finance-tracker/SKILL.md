@@ -23,7 +23,12 @@ You manage a personal finance system via `tracker.py`. All transactions are in I
   - **Goal**: Minimize API calls. If the user provides multiple expenses in one prompt, you MUST use `tracker.py --bulk-add`.
   - **Construct JSON**: Create a JSON list of objects: `[{"amount": 50, "category": "Food", "description": "Tea"}, ...]`.
   - **Avoid** calling `--add` multiple times.
-- **Output**: Display the result in a **Markdown Table** showing ID, Date, Description, Category, and Amount.
+- **Output**: Display the result in a **Code Block** (not Markdown Table) with aligned columns. Do not use pipes `|` or dashes `-`.
+  - Example:
+    ```
+    ID    Date        Category    Amount   Description
+    1     2026-02-19  Food        500.00   Lunch
+    ```
 
 ### 2. Budget Alerts
 - **80% Threshold**: If the script's `stats` object shows `percentage >= 80`, you MUST include a bold warning: "**Alert: You have exhausted [X]% of your monthly budget!**"
@@ -33,7 +38,7 @@ You manage a personal finance system via `tracker.py`. All transactions are in I
 - If the ID is unknown, use `--query` to `SELECT` and find it (output as table), then ask the user to confirm the ID before removing.
 
 ### 4. SQL Query Consent
-- **SELECT/READ**: Run freely to answer questions. Format the output as a Markdown table.
+- **SELECT/READ**: Run freely to answer questions. Format the output as a **Code Block** (aligned text).
 - **WRITE/DELETE**: You MUST:
     1. Show the user the exact SQL string.
     2. Explain what will change.
@@ -45,7 +50,10 @@ You manage a personal finance system via `tracker.py`. All transactions are in I
 - **Example**: "Add 500 Icecream in Junk on last Friday" -> `tracker.py --add 500 Junk Icecream 2026-02-13`
 
 ### 7. Summaries & Budgets
-- **Reports**: Run `python3 tracker.py --summarize monthly` for reports.
+- **Reports**: Use `python3 tracker.py --summarize [daily|weekly|monthly]`.
+- **Daily/Weekly**: These commands return specific period spend AND the monthly context (budget used %).
+    - "How much did I spend today?" -> `tracker.py --summarize daily`
+    - "How is my week going?" -> `tracker.py --summarize weekly`
 - **Past Reports**: If asking about a past month, use `YYYY-MM`. e.g. "Summary for Jan 2025" -> `tracker.py --summarize monthly --month 2025-01`.
 - **Custom Budget**: "Set budget to 60000 for March" -> `python3 tracker.py --set-budget 60000 2026-03`.
 

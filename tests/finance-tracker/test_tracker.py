@@ -5,6 +5,7 @@ import os
 import sys
 import threading
 import time
+import datetime
 
 # Add the skills directory to the python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../skills/finance-tracker')))
@@ -57,7 +58,7 @@ class TestFinanceTracker(unittest.TestCase):
     def test_summarize_empty(self):
         """Verify summary of an empty database returns default budget and 0 spent."""
         result = summarize('monthly')
-        self.assertEqual(result['spent'], 0)
+        self.assertEqual(result['monthly_spent'], 0)
         self.assertEqual(result['budget'], 50000.0)
         self.assertEqual(result['savings'], 50000.0)
 
@@ -67,7 +68,7 @@ class TestFinanceTracker(unittest.TestCase):
         add_expense(200.0, "Transport", "Bus")
         
         result = summarize('monthly')
-        self.assertEqual(result['spent'], 300.0)
+        self.assertEqual(result['monthly_spent'], 300.0)
         self.assertEqual(result['budget'], 50000.0)
         self.assertEqual(result['savings'], 49700.0)
 
@@ -123,15 +124,28 @@ class TestFinanceTracker(unittest.TestCase):
         result = summarize('monthly', month_num="2025-01")
         
         self.assertEqual(result['month'], "2025-01")
-        self.assertEqual(result['spent'], 1000.0)
+        self.assertEqual(result['monthly_spent'], 1000.0)
         
         # Check if it persisted in budgets table
         conn = sqlite3.connect(DB_NAME)
         row = conn.execute("SELECT * FROM budgets WHERE month_key = ?", ("2025-01",)).fetchone()
         conn.close()
         
-        self.assertIsNotNone(row)
         self.assertEqual(row[3], 50000.0 - 1000.0) # default limit - spent = savings
+
+    def test_daily_summary(self):
+        """Verify daily summary returns correct day's total and monthly context."""
+        # Add entry for today
+        add_expense(150.0, "Test", "Daily 1")
+        # Add entry for yesterday (should not be in daily total but in monthly)
+        yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
+        add_expense(200.0, "Test", "Yesterday", date=yesterday)
+        
+        result = summarize('daily')
+        
+        self.assertEqual(result['period'], 'daily')
+        self.assertEqual(result['period_spent'], 150.0) # Only today's
+        self.assertEqual(result['monthly_spent'], 350.0) # Both today + yesterday (same month)
 
 if __name__ == '__main__':
     unittest.main()

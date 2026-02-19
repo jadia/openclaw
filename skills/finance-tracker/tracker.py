@@ -4,7 +4,7 @@ import argparse
 import csv
 import os
 import contextlib
-from datetime import datetime
+from datetime import datetime, timedelta
 
 DB_NAME = "finance.db"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -104,30 +104,77 @@ def add_expense(amount, category, description, date=None):
             raise e
 
 def summarize(p_type, month_num=None):
-    # Support both "MM" (current year) and "YYYY-MM" formats
-    if month_num:
-        if len(month_num) == 7 and '-' in month_num: # Format YYYY-MM
-             year_month = month_num
-        else:
-             year_month = f"{datetime.now().year}-{month_num}"
-    else:
-        year_month = datetime.now().strftime('%Y-%m')
+    # Determine date range based on p_type
+    date_filter = ""
+    start_date = ""
+    end_date = ""
     
+    now = datetime.now()
+    if p_type == 'daily':
+        # Default to today, or parse month_num if provided as full date? 
+        # For simplicity, stick to today unless specific date logic added later.
+        # But if month_num is passed as YYYY-MM-DD for daily, we can use it.
+        if month_num and len(month_num) == 10:
+             target_date = month_num
+        else:
+             target_date = now.strftime('%Y-%m-%d')
+        date_filter = f"transaction_date = '{target_date}'"
+        
+    elif p_type == 'weekly':
+        # Current week (Monday to Sunday)
+        # SQLite 'now' might be UTC, best to calculate range in Python
+        # weekday(): Mon=0, Sun=6
+        start_of_week = now.date() - datetime.timedelta(days=now.weekday())
+        end_of_week = start_of_week + datetime.timedelta(days=6)
+        date_filter = f"transaction_date BETWEEN '{start_of_week}' AND '{end_of_week}'"
+
+    # Always calculate monthly context
+    # Support both "MM" (current year) and "YYYY-MM" formats
+    if month_num and len(month_num) == 7 and '-' in month_num:
+         year_month = month_num
+    elif month_num and len(month_num) == 10: # If full date passed, extract YYYY-MM
+         year_month = month_num[:7]
+    elif month_num and len(month_num) <= 2:
+         year_month = f"{now.year}-{month_num}"
+    else:
+        year_month = now.strftime('%Y-%m')
+
     with get_db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            res = conn.execute("SELECT SUM(amount) as s FROM expenses WHERE transaction_date LIKE ?", (f"{year_month}%",)).fetchone()
-            spent = res['s'] if res and res['s'] else 0
+            # 1. Get Monthly Stats (Context)
+            monthly_res = conn.execute("SELECT SUM(amount) as s FROM expenses WHERE transaction_date LIKE ?", (f"{year_month}%",)).fetchone()
+            monthly_spent = monthly_res['s'] if monthly_res and monthly_res['s'] else 0.0
             
             config = load_config()
             budget_row = conn.execute("SELECT budget_limit FROM budgets WHERE month_key = ?", (year_month,)).fetchone()
             limit = budget_row['budget_limit'] if budget_row else config['default_monthly_budget']
-            savings = limit - spent
+            savings = limit - monthly_spent
             
-            conn.execute('''INSERT INTO budgets (month_key, budget_limit, monthly_savings) VALUES (?, ?, ?)
-                            ON CONFLICT(month_key) DO UPDATE SET monthly_savings=excluded.monthly_savings''', (year_month, limit, savings))
+            # Update Budgets Table (Only valid for monthly summary logic)
+            if p_type == 'monthly':
+                conn.execute('''INSERT INTO budgets (month_key, budget_limit, monthly_savings) VALUES (?, ?, ?)
+                                ON CONFLICT(month_key) DO UPDATE SET monthly_savings=excluded.monthly_savings''', (year_month, limit, savings))
+            
+            # 2. Get Specific Period Stats
+            period_spent = 0.0
+            if p_type != 'monthly':
+                period_res = conn.execute(f"SELECT SUM(amount) as s FROM expenses WHERE {date_filter}").fetchone()
+                period_spent = period_res['s'] if period_res and period_res['s'] else 0.0
+            else:
+                period_spent = monthly_spent
+            
             conn.commit()
-            return {"month": year_month, "spent": spent, "budget": limit, "savings": savings}
+            
+            return {
+                "period": p_type,
+                "period_spent": period_spent,
+                "month": year_month, 
+                "monthly_spent": monthly_spent, 
+                "budget": limit, 
+                "savings": savings,
+                "percentage": (monthly_spent/limit)*100 if limit > 0 else 0
+            }
         except Exception as e:
             conn.rollback()
             raise e
