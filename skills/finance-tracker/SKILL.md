@@ -1,72 +1,118 @@
 ---
 name: finance-tracker
-description: Proactive finance manager with SQL access and 80% budget alerts.
+description: Proactive finance manager with audit logging, category budgets, and smart categorisation.
 user-invocable: true
 ---
 
 # Finance Tracker Instructions
 
 You manage a personal finance system via `tracker.py`. All transactions are in Indian Rupees (₹).
+All script output is JSON. Always run commands from the skill directory.
 
-## Database Schema Reference
-- **expenses**: `id`, `amount`, `category`, `description`, `transaction_date` (YYYY-MM-DD), `inserted_on`, `updated_on`
-- **budgets**: `id`, `month_key` (YYYY-MM), `budget_limit`, `monthly_savings`, `updated_on`
+## First-Time Setup
+
+If the database does not exist, initialise it:
+```
+python3 tracker.py --init
+```
+
+## Database Schema
+
+- **expenses**: `id`, `amount`, `category`, `description`, `transaction_date` (YYYY-MM-DD), `deleted_at`, `inserted_on`, `updated_on`
+- **budgets**: `id`, `month_key` (YYYY-MM or 'default'), `category` (NULL = overall), `budget_limit`, `inserted_on`, `updated_on`
+- **audit_log**: `id`, `action`, `table_name`, `row_id`, `old_values`, `new_values`, `source`, `created_on`
 
 ## Operational Rules
 
-### 1. Expense Entry & Categorization
-- **Single Entry Pattern**: The user often uses the format "Add [Amount] for [Description] in [Category]".
-  - Example: "Add 500 for McDonalds in Junk" -> `tracker.py --add 500 "Junk" "McDonalds"`
-- **New Categories**: If a user provides a new category, ask: "The category '[Name]' is new. Should I create it or log this as 'Uncategorised'?"
-- **No Category**: If user skip category, try to identify the category from the description. If not found, use "Uncategorised".
-- **Multiple Entries (Bulk Add)**:
-  - **Goal**: Minimize API calls. If the user provides multiple expenses in one prompt, you MUST use `tracker.py --bulk-add`.
-  - **Construct JSON**: Create a JSON list of objects: `[{"amount": 50, "category": "Food", "description": "Tea"}, ...]`.
-  - **Avoid** calling `--add` multiple times.
-- **Output**: Display the result in a **Code Block** (not Markdown Table) with aligned columns. Do not use pipes `|` or dashes `-`.
-  - Example:
-    ```
-    ID    Date        Category    Amount   Description
-    1     2026-02-19  Food        500.00   Lunch
-    ```
+### 1. Expense Entry
 
-### 2. Budget Alerts
-- **80% Threshold**: If the script's `stats` object shows `percentage >= 80`, you MUST include a bold warning: "**Alert: You have exhausted [X]% of your monthly budget!**"
+- **Single**: `python3 tracker.py --add <amount> <category> <description> [YYYY-MM-DD]`
+- **Bulk** (always prefer for multiple items):
+  ```
+  python3 tracker.py --bulk-add '[{"amount":50,"category":"Food","description":"Tea"},...]'
+  ```
+- **Backdating**: Convert natural language dates to YYYY-MM-DD and pass as 4th arg.
+  - "Add Rs.220 for pizza to junk on last Friday" → `--add 220 Junk Pizza 2026-02-20`
 
-### 3. Deletions & Modifications
-- Always try to identify the **ID** first. If known, use `python3 tracker.py --remove <ID>`.
-- If the ID is unknown, use `--query` to `SELECT` and find it (output as table), then ask the user to confirm the ID before removing.
+### 2. Smart Categorisation
 
-### 4. SQL Query Consent
-- **SELECT/READ**: Run freely to answer questions. Format the output as a **Code Block** (aligned text).
-- **WRITE/DELETE**: You MUST:
-    1. Show the user the exact SQL string.
-    2. Explain what will change.
-    3. Wait for "Yes" or "Proceed" before executing.
+When the user omits a category:
+1. **Suggest**: `python3 tracker.py --suggest-category "Pizza"`
+   - Returns `{"suggested":"Junk","confidence":5,...}`
+2. **If confidence ≥ 3**: Auto-use the suggested category.
+3. **If confidence < 3**: Run `python3 tracker.py --categories` to list all categories, then use your judgement or ask the user.
+4. **If wrong**: `python3 tracker.py --update-category <id> <correct_category>`
 
-### 6. Date Handling
-- **Backdating**: The date parameter is optional. If the user specifies a past date, convert natural language (e.g., "last Friday", "yesterday", "20th Jan") to `YYYY-MM-DD` and pass it to `--add`.
-- **Command Structure**: `tracker.py --add <Amount> <Category> <Description> <YYYY-MM-DD>`
-- **Example**: "Add 500 Icecream in Junk on last Friday" -> `tracker.py --add 500 Junk Icecream 2026-02-13`
+### 3. Deletions
 
-### 7. Summaries & Budgets
-- **Reports**: Use `python3 tracker.py --summarize [daily|weekly|monthly]`.
-- **Daily/Weekly**: These commands return specific period spend AND the monthly context (budget used %).
-    - "How much did I spend today?" -> `tracker.py --summarize daily`
-    - "How is my week going?" -> `tracker.py --summarize weekly`
-- **Past Reports**: If asking about a past month, use `YYYY-MM`. e.g. "Summary for Jan 2025" -> `tracker.py --summarize monthly --month 2025-01`.
-- **Custom Budget**: "Set budget to 60000 for March" -> `python3 tracker.py --set-budget 60000 2026-03`.
+- `--remove <ID>` performs a **soft-delete** (recoverable). The entry is excluded from reports.
+- Always confirm the entry with the user before removing.
+- If ID is unknown, use `--query` to find it first.
 
-### 7. Error Handling
-- If the script returns an error JSON, explain the error to the user in plain English.
-- If the database is locked, apologize and retry once.
+### 4. Budget Management
+
+- **Set overall budget**: `python3 tracker.py --set-budget 50000 2026-03`
+- **Set category budget**: `python3 tracker.py --set-budget 3000 2026-03 Junk`
+- **Set global default**: `python3 tracker.py --set-budget 50000 default`
+- **Set global category default**: `python3 tracker.py --set-budget 3000 default Junk`
+
+### 5. Budget Alerts
+
+When the summary JSON shows `percentage >= 80`, include:
+> **⚠️ Alert: You have exhausted [X]% of your monthly budget!**
+
+When a category's `overspent` field is `true`, include:
+> **⚠️ Over budget on [Category]! Spent ₹X / ₹Y limit.**
+
+### 6. SQL Query Rules
+
+- **`--query` (read-only)**: Run freely. SELECT only. Format output as aligned code block.
+- **`--query-write` (mutations)**: You **MUST**:
+  1. Show the user the exact SQL.
+  2. Explain what will change.
+  3. Wait for explicit "Yes" / "Proceed" before executing.
+
+### 7. Summaries
+
+- `python3 tracker.py --summarize daily`
+- `python3 tracker.py --summarize weekly`
+- `python3 tracker.py --summarize monthly`
+- Past month: `python3 tracker.py --summarize monthly --month 2026-01`
+
+Summaries include per-category breakdown with budget comparison.
+
+### 8. Maintenance
+
+- **Purge deleted entries**: `python3 tracker.py --purge`
+- **Export to CSV**: `python3 tracker.py --export`
+
+### 9. Error Handling
+
+- If JSON contains `"status": "error"`, explain the error in plain English.
+- If database is locked, apologise and retry once.
+
+### 10. Output Formatting
+
+Display results in a **code block** with aligned columns. Do not use markdown table pipes.
+```
+ID    Date        Category    Amount   Description
+1     2026-02-28  Food        500.00   Lunch
+```
 
 ## Cheat Sheet
 
-| Feature | Command Pattern |
-| :--- | :--- |
-| **Log One** | `python3 tracker.py --add <amt> <cat> <desc>` |
-| **Log Many** | `python3 tracker.py --bulk-add '[{"amount":...}, ...]'` |
-| **Check Spend** | `python3 tracker.py --summarize monthly` |
-| **Set Budget** | `python3 tracker.py --set-budget <limit> <YYYY-MM>` |
-| **Custom Query** | `python3 tracker.py --query "<SQL>"` |
+| Action | Command |
+|:---|:---|
+| **Init DB** | `python3 tracker.py --init` |
+| **Add one** | `python3 tracker.py --add 500 Junk Pizza` |
+| **Add many** | `python3 tracker.py --bulk-add '[...]'` |
+| **Remove** | `python3 tracker.py --remove 5` |
+| **Set budget** | `python3 tracker.py --set-budget 50000 2026-03` |
+| **Category budget** | `python3 tracker.py --set-budget 3000 default Junk` |
+| **Fix category** | `python3 tracker.py --update-category 5 Food` |
+| **Suggest cat** | `python3 tracker.py --suggest-category "Pizza"` |
+| **List cats** | `python3 tracker.py --categories` |
+| **Summary** | `python3 tracker.py --summarize monthly` |
+| **Read query** | `python3 tracker.py --query "SELECT ..."` |
+| **Write query** | `python3 tracker.py --query-write "UPDATE ..."` |
+| **Purge** | `python3 tracker.py --purge` |

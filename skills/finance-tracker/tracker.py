@@ -1,251 +1,181 @@
-import sqlite3
-import json
+#!/usr/bin/env python3
+"""
+tracker.py — CLI entry point for the finance tracker skill.
+
+This is a thin dispatcher that parses arguments and delegates to:
+  - ledger.py  for all data mutations (writes, deletes, budget changes)
+  - reports.py for all read-only operations (summaries, queries, exports)
+
+All output is JSON for easy parsing by agents like OpenClaw.
+
+Usage:
+  python3 tracker.py --init               # First-time DB setup
+  python3 tracker.py --add 500 Junk Pizza  # Add expense
+  python3 tracker.py --summarize monthly   # Monthly report
+  python3 tracker.py --help                # Full help
+"""
+
 import argparse
-import csv
+import json
+import sys
 import os
-import contextlib
-from datetime import datetime, timedelta
 
-DB_NAME = "finance.db"
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+# Ensure the skill directory is on the import path so ledger/reports resolve
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        config = {"default_monthly_budget": 50000.0, "currency": "₹"}
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(config, f)
-        return config
-    with open(CONFIG_FILE, 'r') as f:
-        return json.load(f)
+import ledger
+import reports
 
-@contextlib.contextmanager
-def get_db():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    # Enable foreign keys just in case, though not strictly used here yet
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-    finally:
-        conn.close()
 
-def init_db():
-    with get_db() as conn:
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS expenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            amount REAL NOT NULL,
-            category TEXT DEFAULT 'Uncategorised',
-            description TEXT,
-            transaction_date TEXT,
-            inserted_on TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_on TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS budgets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            month_key TEXT UNIQUE,
-            budget_limit REAL,
-            monthly_savings REAL DEFAULT 0,
-            inserted_on TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_on TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS analytics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            period_type TEXT,
-            period_key TEXT,
-            total_amount REAL,
-            category_breakdown TEXT,
-            inserted_on TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_on TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(period_type, period_key))''')
-        
-        for table in ['expenses', 'budgets', 'analytics']:
-            c.execute(f'''CREATE TRIGGER IF NOT EXISTS update_{table}_timestamp 
-                        AFTER UPDATE ON {table} BEGIN
-                        UPDATE {table} SET updated_on = CURRENT_TIMESTAMP WHERE id = old.id; END;''')
-        conn.commit()
+def _output(data):
+    """Print JSON to stdout. All CLI output goes through here."""
+    print(json.dumps(data, default=str))
 
-def get_monthly_stats(conn, date_str):
-    """
-    Internal helper to calculate stats using an existing connection.
-    Does NOT commit or close the connection.
-    """
-    month_key = date_str[:7]
-    
-    res = conn.execute("SELECT SUM(amount) as total FROM expenses WHERE transaction_date LIKE ?", (f"{month_key}%",)).fetchone()
-    spent = res['total'] if res and res['total'] is not None else 0.0
-    
-    budget = conn.execute("SELECT budget_limit FROM budgets WHERE month_key = ?", (month_key,)).fetchone()
-    
-    limit = budget['budget_limit'] if budget else load_config()['default_monthly_budget']
-    
-    return {"spent": spent, "limit": limit, "percentage": (spent/limit)*100 if limit > 0 else 0}
 
-def add_expense(amount, category, description, date=None):
-    if not date: date = datetime.now().strftime('%Y-%m-%d')
-    
-    with get_db() as conn:
-        # Use immediate transaction to prevent other writers from jumping in
-        conn.execute("BEGIN IMMEDIATE") 
-        try:
-            cur = conn.cursor()
-            cur.execute("INSERT INTO expenses (amount, category, description, transaction_date) VALUES (?, ?, ?, ?)",
-                        (amount, category or "Uncategorised", description, date))
-            new_id = cur.lastrowid
-            
-            # Fetch the row back within the same transaction
-            row = dict(cur.execute("SELECT * FROM expenses WHERE id = ?", (new_id,)).fetchone())
-            
-            # Calculate stats within the same isolation snapshot
-            stats = get_monthly_stats(conn, date)
-            
-            conn.commit()
-            return {"status": "success", "data": row, "stats": stats}
-        except Exception as e:
-            conn.rollback()
-            raise e
+def main():
+    parser = argparse.ArgumentParser(
+        description="Personal finance tracker with audit logging."
+    )
 
-def summarize(p_type, month_num=None):
-    # Determine date range based on p_type
-    date_filter = ""
-    start_date = ""
-    end_date = ""
-    
-    now = datetime.now()
-    if p_type == 'daily':
-        # Default to today, or parse month_num if provided as full date? 
-        # For simplicity, stick to today unless specific date logic added later.
-        # But if month_num is passed as YYYY-MM-DD for daily, we can use it.
-        if month_num and len(month_num) == 10:
-             target_date = month_num
-        else:
-             target_date = now.strftime('%Y-%m-%d')
-        date_filter = f"transaction_date = '{target_date}'"
-        
-    elif p_type == 'weekly':
-        # Current week (Monday to Sunday)
-        # SQLite 'now' might be UTC, best to calculate range in Python
-        # weekday(): Mon=0, Sun=6
-        start_of_week = now.date() - datetime.timedelta(days=now.weekday())
-        end_of_week = start_of_week + datetime.timedelta(days=6)
-        date_filter = f"transaction_date BETWEEN '{start_of_week}' AND '{end_of_week}'"
+    # --- Ledger (write) commands ---
+    parser.add_argument(
+        "--init", action="store_true",
+        help="Initialise the database (first-time setup).",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Force re-initialisation if DB exists (use with --init).",
+    )
+    parser.add_argument(
+        "--add", nargs="+", metavar=("AMT", "ARGS"),
+        help="Add expense: --add <amount> <category> <description> [YYYY-MM-DD]",
+    )
+    parser.add_argument(
+        "--bulk-add", type=str, metavar="JSON",
+        help='Batch add: --bulk-add \'[{"amount":50,"category":"Food","description":"Tea"}]\'',
+    )
+    parser.add_argument(
+        "--remove", type=int, metavar="ID",
+        help="Soft-delete an expense by ID.",
+    )
+    parser.add_argument(
+        "--purge", action="store_true",
+        help="Permanently remove all soft-deleted expenses.",
+    )
+    parser.add_argument(
+        "--set-budget", nargs="+", metavar=("LIMIT", "ARGS"),
+        help="Set budget: --set-budget <limit> [YYYY-MM|default] [category]",
+    )
+    parser.add_argument(
+        "--update-category", nargs=2, metavar=("ID", "CATEGORY"),
+        help="Change category of an expense: --update-category <id> <category>",
+    )
+    parser.add_argument(
+        "--query-write", type=str, metavar="SQL",
+        help="Execute mutating SQL (audited). Agent must confirm with user first.",
+    )
 
-    # Always calculate monthly context
-    # Support both "MM" (current year) and "YYYY-MM" formats
-    if month_num and len(month_num) == 7 and '-' in month_num:
-         year_month = month_num
-    elif month_num and len(month_num) == 10: # If full date passed, extract YYYY-MM
-         year_month = month_num[:7]
-    elif month_num and len(month_num) <= 2:
-         year_month = f"{now.year}-{month_num}"
-    else:
-        year_month = now.strftime('%Y-%m')
-
-    with get_db() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            # 1. Get Monthly Stats (Context)
-            monthly_res = conn.execute("SELECT SUM(amount) as s FROM expenses WHERE transaction_date LIKE ?", (f"{year_month}%",)).fetchone()
-            monthly_spent = monthly_res['s'] if monthly_res and monthly_res['s'] else 0.0
-            
-            config = load_config()
-            budget_row = conn.execute("SELECT budget_limit FROM budgets WHERE month_key = ?", (year_month,)).fetchone()
-            limit = budget_row['budget_limit'] if budget_row else config['default_monthly_budget']
-            savings = limit - monthly_spent
-            
-            # Update Budgets Table (Only valid for monthly summary logic)
-            if p_type == 'monthly':
-                conn.execute('''INSERT INTO budgets (month_key, budget_limit, monthly_savings) VALUES (?, ?, ?)
-                                ON CONFLICT(month_key) DO UPDATE SET monthly_savings=excluded.monthly_savings''', (year_month, limit, savings))
-            
-            # 2. Get Specific Period Stats
-            period_spent = 0.0
-            if p_type != 'monthly':
-                period_res = conn.execute(f"SELECT SUM(amount) as s FROM expenses WHERE {date_filter}").fetchone()
-                period_spent = period_res['s'] if period_res and period_res['s'] else 0.0
-            else:
-                period_spent = monthly_spent
-            
-            conn.commit()
-            
-            return {
-                "period": p_type,
-                "period_spent": period_spent,
-                "month": year_month, 
-                "monthly_spent": monthly_spent, 
-                "budget": limit, 
-                "savings": savings,
-                "percentage": (monthly_spent/limit)*100 if limit > 0 else 0
-            }
-        except Exception as e:
-            conn.rollback()
-            raise e
-
-if __name__ == "__main__":
-    init_db()
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--add", nargs='+') # amount, cat, desc, [date]
-    parser.add_argument("--bulk-add", type=str) # JSON string
-    parser.add_argument("--remove", type=int)
-    parser.add_argument("--query", type=str)
-    parser.add_argument("--summarize", choices=['daily', 'weekly', 'monthly'])
-    parser.add_argument("--month", type=str)
-    parser.add_argument("--set-budget", nargs=2) # amount, month_key
-    parser.add_argument("--export", action="store_true")
+    # --- Reports (read) commands ---
+    parser.add_argument(
+        "--summarize", choices=["daily", "weekly", "monthly"],
+        help="Spend summary for a period.",
+    )
+    parser.add_argument(
+        "--month", type=str, metavar="YYYY-MM",
+        help="Target month for --summarize or --set-budget.",
+    )
+    parser.add_argument(
+        "--query", type=str, metavar="SQL",
+        help="Run a read-only SQL query (SELECT only).",
+    )
+    parser.add_argument(
+        "--categories", action="store_true",
+        help="List all distinct expense categories.",
+    )
+    parser.add_argument(
+        "--suggest-category", type=str, metavar="DESC",
+        help="Suggest a category based on past entries matching description.",
+    )
+    parser.add_argument(
+        "--export", action="store_true",
+        help="Export expenses and budgets to CSV.",
+    )
 
     args = parser.parse_args()
+    config = ledger.load_config()
+
     try:
+        # --init doesn't require an existing DB
+        if args.init:
+            _output(ledger.init_db(config, force=args.force))
+            return
+
+        # Everything else needs the DB to exist
+        if not os.path.exists(config["db_path"]):
+            _output({
+                "status": "error",
+                "message": (
+                    f"Database not found at '{config['db_path']}'. "
+                    "Run: python3 tracker.py --init"
+                ),
+            })
+            sys.exit(1)
+
+        # --- Dispatch: ledger (writes) ---
         if args.add:
             amount = float(args.add[0])
-            category = args.add[1]
-            description = args.add[2]
-            d = args.add[3] if len(args.add) > 3 else None
-            print(json.dumps(add_expense(amount, category, description, d)))
+            category = args.add[1] if len(args.add) > 1 else "Uncategorised"
+            description = args.add[2] if len(args.add) > 2 else ""
+            date = args.add[3] if len(args.add) > 3 else None
+            _output(ledger.add_expense(config, amount, category, description, date))
+
         elif args.bulk_add:
-            expenses = json.loads(args.bulk_add)
-            results = []
-            with get_db() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                cur = conn.cursor()
-                try:
-                    for exp in expenses:
-                        amount = float(exp.get('amount'))
-                        category = exp.get('category', 'Uncategorised')
-                        description = exp.get('description', '')
-                        date = exp.get('date', datetime.now().strftime('%Y-%m-%d'))
-                        
-                        cur.execute("INSERT INTO expenses (amount, category, description, transaction_date) VALUES (?, ?, ?, ?)",
-                                    (amount, category, description, date))
-                        
-                        # We don't fetch every row back to keep it fast, just track success
-                        results.append({"status": "queued", "description": description})
-                    
-                    # Calculate stats once at the end
-                    stats = get_monthly_stats(conn, datetime.now().strftime('%Y-%m-%d'))
-                    conn.commit()
-                    print(json.dumps({"status": "success", "count": len(results), "stats": stats}))
-                except Exception as e:
-                    conn.rollback()
-                    raise e
-        elif args.remove:
-            with get_db() as conn:
-                conn.execute("DELETE FROM expenses WHERE id=?", (args.remove,))
-                conn.commit()
-            print(json.dumps({"status": "deleted", "id": args.remove}))
-        elif args.query:
-            with get_db() as conn:
-                # Read-only query, no need for immediate transaction unless strictly required for consistency
-                # Default deferred transaction is fine for SELECT
-                res = [dict(r) for r in conn.execute(args.query).fetchall()]
-            print(json.dumps(res))
+            expenses_list = json.loads(args.bulk_add)
+            _output(ledger.bulk_add(config, expenses_list))
+
+        elif args.remove is not None:
+            _output(ledger.soft_delete(config, args.remove))
+
+        elif args.purge:
+            _output(ledger.purge_deleted(config))
+
+        elif args.set_budget:
+            limit = float(args.set_budget[0])
+            month_key = args.set_budget[1] if len(args.set_budget) > 1 else "default"
+            category = args.set_budget[2] if len(args.set_budget) > 2 else None
+            _output(ledger.set_budget(config, limit, month_key, category))
+
+        elif args.update_category:
+            _output(ledger.update_category(
+                config, int(args.update_category[0]), args.update_category[1]
+            ))
+
+        elif args.query_write:
+            _output(ledger.query_write(config, args.query_write))
+
+        # --- Dispatch: reports (reads) ---
         elif args.summarize:
-            print(json.dumps(summarize(args.summarize, args.month)))
+            _output(reports.summarize(config, args.summarize, args.month))
+
+        elif args.query:
+            _output(reports.query_read(config, args.query))
+
+        elif args.categories:
+            _output(reports.list_categories(config))
+
+        elif args.suggest_category:
+            _output(reports.suggest_category(config, args.suggest_category))
+
         elif args.export:
-            with get_db() as conn:
-                for t in ['expenses', 'budgets', 'analytics']:
-                    rows = conn.execute(f"SELECT * FROM {t}").fetchall()
-                    if rows:
-                        with open(f"{t}.csv", 'w') as f:
-                            w = csv.DictWriter(f, fieldnames=rows[0].keys())
-                            w.writeheader(); w.writerows([dict(r) for r in rows])
-            print(json.dumps({"status": "exported"}))
+            _output(reports.export_csv(config))
+
+        else:
+            parser.print_help()
+
     except Exception as e:
-        print(json.dumps({"error": str(e)}))
+        _output({"status": "error", "message": str(e)})
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
