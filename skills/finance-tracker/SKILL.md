@@ -31,8 +31,12 @@ python3 tracker.py --init
   ```
   python3 tracker.py --bulk-add '[{"amount":50,"category":"Food","description":"Tea"},...]'
   ```
+- **Aggregation**: If adding multiple items that fall under the SAME category, aggregate them into a single entry with the total amount. List the individual items in the description.
+  - *Example*: "Add grocery items (milk, bread, eggs) for Rs.700 and ice-cream for Rs.50." → 
+    `--bulk-add '[{"amount":700,"category":"Groceries","description":"Grocery items: milk, bread, eggs"}, {"amount":50,"category":"Junk","description":"Ice-cream"}]'`
+- **Order Tracking**: If an order ID or transaction ID is mentioned, ALWAYS append it to the description to help identify duplicates later (e.g., `Pizza [Order ID: 1234]`).
 - **Backdating**: Convert natural language dates to YYYY-MM-DD and pass as 4th arg.
-  - "Add Rs.220 for pizza to junk on last Friday" → `--add 220 Junk Pizza 2026-02-20`
+  - *Example*: "Add Rs.220 for pizza to junk on last Friday" → `--add 220 Junk Pizza 2026-02-20`
 
 ### 2. Smart Categorisation
 
