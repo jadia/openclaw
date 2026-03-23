@@ -336,9 +336,37 @@ def _insert_into_ledger(candidates: list, settings: dict) -> dict:
         txn = candidate.get("transaction", {})
         if not txn or not txn.get("amount"):
             continue
+
+        desc = txn.get("description", "")
+        merchant = txn.get("merchant", "")
+        
+        # Auto-categorise
+        category = "Uncategorized"
+        try:
+            suggest_desc = f"{merchant} {desc}".strip()
+            if suggest_desc:
+                res = subprocess.run(
+                    [sys.executable, tracker_path, "--suggest-category", suggest_desc],
+                    capture_output=True,
+                    text=True,
+                    cwd=os.path.dirname(tracker_path),
+                    timeout=5
+                )
+                if res.returncode == 0:
+                    sug_data = json.loads(res.stdout.strip())
+                    conf = sug_data.get("confidence", 0)
+                    if sug_data.get("suggested") and conf >= 3:
+                        category = sug_data["suggested"]
+                        logger.info("Auto-categorised: '%s' -> '%s' (conf: %s)", suggest_desc, category, conf)
+                    else:
+                        logger.debug("Category fallback: '%s' -> 'Uncategorized' (conf: %s)", suggest_desc, conf)
+        except Exception as e:
+            logger.debug("Category suggestion failed: %s", e)
+
         expense = {
             "amount": txn["amount"],
-            "description": txn.get("description", ""),
+            "category": category,
+            "description": f"{merchant} - {desc}".strip() if merchant and desc else (merchant or desc),
             "date": txn.get("transaction_date", datetime.now().strftime("%Y-%m-%d")),
         }
         uid_index[len(expenses)] = candidate.get("email_uid")
@@ -531,7 +559,7 @@ def main():
     )
     p.add_argument(
         "--reprocess", action="store_true",
-        help="Reprocess emails in a date range (use with --from and --to)",
+        help="Reprocess emails starting from a date (use with --from, optional --to)",
     )
     p.add_argument(
         "--from", dest="from_date", type=str, metavar="YYYY-MM-DD",
@@ -539,7 +567,7 @@ def main():
     )
     p.add_argument(
         "--to", dest="to_date", type=str, metavar="YYYY-MM-DD",
-        help="End date for --reprocess",
+        help="End date for --reprocess (default: today)",
     )
 
     args = p.parse_args()
@@ -560,9 +588,10 @@ def main():
     if args.process:
         process_emails(settings)
     elif args.reprocess:
-        if not args.from_date or not args.to_date:
-            p.error("--reprocess requires --from YYYY-MM-DD and --to YYYY-MM-DD")
-        reprocess_emails(settings, args.from_date, args.to_date)
+        if not args.from_date:
+            p.error("--reprocess requires at least --from YYYY-MM-DD")
+        to_date = args.to_date or datetime.now().strftime("%Y-%m-%d")
+        reprocess_emails(settings, args.from_date, to_date)
     else:
         p.print_help()
 

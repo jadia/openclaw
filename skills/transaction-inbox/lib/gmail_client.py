@@ -14,7 +14,7 @@ import email.utils
 import imaplib
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from html.parser import HTMLParser
 from io import StringIO
 
@@ -123,7 +123,7 @@ class GmailClient:
         """
         # IMAP date format: DD-Mon-YYYY
         from_dt = datetime.strptime(from_date, "%Y-%m-%d")
-        to_dt = datetime.strptime(to_date, "%Y-%m-%d")
+        to_dt = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
 
         imap_from = from_dt.strftime("%d-%b-%Y")
         imap_to = to_dt.strftime("%d-%b-%Y")

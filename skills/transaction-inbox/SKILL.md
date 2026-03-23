@@ -18,7 +18,7 @@ The Python orchestrator lives at `bin/main.py`. Dependencies are stdlib-only (no
 **CLI routes:**
 - Setup: `.venv/bin/python bin/main.py --setup`
 - Process new emails: `.venv/bin/python bin/main.py --process`
-- Reprocess date range: `.venv/bin/python bin/main.py --reprocess --from 2026-03-20 --to 2026-03-24`
+- Reprocess date range: `.venv/bin/python bin/main.py --reprocess --from 2026-03-20` (optional `--to 2026-03-24`)
 
 ## When the User Says "Process My Transaction Emails"
 
@@ -31,14 +31,15 @@ This will:
 2. Filter by allowed senders (non-matching emails stay unseen for other skills)
 3. Parse transaction details (regex for known senders, LLM fallback for others)
 4. Deduplicate against recent ledger and within-batch
-5. Auto-insert new transactions into finance-tracker
-6. Send you a Telegram summary
+5. Auto-categorise using finance-tracker's `--suggest-category` (defaults to "Uncategorized" if low confidence)
+6. Auto-insert new transactions into finance-tracker
+7. Send you a Telegram summary
 
 ## When the User Says "Reprocess Emails from Last Week"
 
-Parse the date range and run:
+Parse the date range and run (note that `--to` is optional and defaults to today):
 ```
-.venv/bin/python bin/main.py --reprocess --from 2026-03-16 --to 2026-03-23
+.venv/bin/python bin/main.py --reprocess --from 2026-03-16
 ```
 
 ## State

@@ -158,8 +158,10 @@ Tell OpenClaw: "Process my transaction emails"
 
 ### Reprocess a Date Range
 
+If you missed a few days or want to trigger a bulk backfill, use `--reprocess` with a date range (Note: `--to` is optional and defaults to today):
+
 ```bash
-python3 bin/main.py --reprocess --from 2026-03-15 --to 2026-03-23
+python3 bin/main.py --reprocess --from 2026-03-15
 ```
 
 This re-fetches all emails in the range regardless of Seen status. Dedup against the ledger prevents double-insertion.
