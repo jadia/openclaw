@@ -1,0 +1,8 @@
+name: transaction-inbox
+version: 1.0.0
+description: Batch email transaction ingestion — fetches from Gmail, parses, deduplicates, and inserts into finance-tracker.
+entry_point: bin/main.py
+language: python
+dependencies:
+  - imaplib
+  - email

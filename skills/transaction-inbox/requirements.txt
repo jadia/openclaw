@@ -1,0 +1,2 @@
+# No external dependencies — uses only Python stdlib
+# imaplib, email, json, re, logging are all built-in
