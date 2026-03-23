@@ -9,13 +9,18 @@ cd "$BASE_DIR"
 if [ ! -d ".venv" ] || [ ! -f ".venv/bin/pip" ]; then
   echo "Creating virtual environment..."
   rm -rf .venv
-  if ! python3 -m venv .venv; then
+  
+  # Try to use virtualenv if available, fallback to python3 -m virtualenv
+  if command -v virtualenv >/dev/null 2>&1; then
+    VENV_CMD="virtualenv .venv"
+  else
+    VENV_CMD="python3 -m virtualenv .venv"
+  fi
+
+  if ! $VENV_CMD; then
     echo -e "\n[!] ERROR: Failed to create virtual environment."
-    echo "This is usually because the 'venv' package is missing on your system."
-    if command -v apt-get >/dev/null 2>&1; then
-      echo "On Debian/Ubuntu, fix this by running:"
-      echo "    sudo apt install python3-venv"
-    fi
+    echo "Make sure you have virtualenv installed:"
+    echo "    pip install virtualenv"
     rm -rf .venv
     exit 1
   fi

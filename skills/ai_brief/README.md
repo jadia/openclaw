@@ -111,7 +111,19 @@ Use OpenClaw cron to automate exactly as above. (Make sure you use the `.venv/bi
   --message "~/.openclaw/skills/ai_brief/.venv/bin/python ~/.openclaw/skills/ai_brief/bin/main.py --daily"
 ```
 
+**Weekly job:**
+```bash
+ openclaw cron add \
+  --name "AI Brief Weekly" \
+  --cron "0 22 * * 0" \
+  --session isolated \
+  --light-context \
+  --no-deliver \
+  --message "~/.openclaw/skills/ai_brief/.venv/bin/python ~/.openclaw/skills/ai_brief/bin/main.py --weekly"
+```
+
 ## 📱 Telegram Integration
+
 
 Because `ai_brief` communicates natively through OpenClaw, you can orchestrate it seamlessly via Telegram!
 
@@ -120,11 +132,18 @@ Because `ai_brief` communicates natively through OpenClaw, you can orchestrate i
 - **On-demand Briefs:**
   > *"Hey OpenClaw, generate my daily AI brief right now."* 
   > *(OpenClaw will run the `main.py --daily` script and report back).*
+  > 
+  > *"Can you fetch my weekly AI digest?"*
   
+- **Deep Dives & Follow-ups:**
+  > *"Tell me more about the first item in today's brief. Search the web if you need to."*
+  > *"Summarize the github repo mentioned in the latest news."*
+
 - **Bookmarks Management:**
-  > *"Bookmark the first item from today's brief."*
+  > *"Bookmark the second item from today's brief."*
   > *"Show me all my bookmarked AI news."*
-  > *"Clear my bookmarks."*
+  > *"Research all my bookmarks and write a comprehensive summary."*
+  > *"Clear all my bookmarks."*
 
 - **Smart Error Recovery:**
   If GitHub or HackerNews blocks the scraper, the python script catches the error and alerts you on Telegram:
