@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "timezone": "Asia/Kolkata",
+  "daily_schedule": "0 22 * * *",
+  "weekly_schedule": "0 22 * * 0",
+  "daily_item_limit": 7,
+  "memory_days": 14,
+  "weekly_repo_limit": 10,
+  "sources": {
+    "hackernews": true,
+    "arxiv": true,
+    "github_trending": true,
+    "youtube_watchlist": true,
+    "x_twitter": false
+  },
+  "arxiv_categories": ["cs.AI", "cs.CL", "cs.LG"],
+  "github_keywords": ["llm", "agent", "rag", "eval", "inference", "serving", "open-source-ai"],
+  "youtube_channels": [
+    "LLMs for Devs",
+    "Full Stack AI LAB",
+    "All Things Open",
+    "Tech With Tim",
+    "Krish Naik",
+    "codebasics"
+  ]
+}
