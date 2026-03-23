@@ -3,7 +3,9 @@
 Repository for OpenClaw Skills, configuration, and documentation.
 
 ## Available Skills
-- **finance-tracker**: A personal finance manager with budget alerts.
+- **ai_brief**: Daily or weekly AI briefing focused on frontier models, developer tools, open-source repos, and practical research updates. Now powered by a robust Python orchestrator.
+- **finance-tracker**: Proactive finance manager with audit logging, category budgets, and smart categorisation.
+- **transaction-inbox**: Batch email transaction ingestion — fetches from Gmail, parses, deduplicates, and inserts into finance-tracker with Telegram review summaries.
 
 ## How to Add a New Skill
 
