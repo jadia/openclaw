@@ -11,18 +11,20 @@ This skill fetches transaction emails from a dedicated Gmail inbox, parses them,
 
 ## Execution / Orchestration
 
+**Assumption:** You must run all commands from within the `skills/transaction-inbox/` directory so that the relative path to `.venv` resolves correctly. If you are not in this directory, `cd` into it first.
+
 The Python orchestrator lives at `bin/main.py`. Dependencies are stdlib-only (no install needed beyond Python 3.9+).
 
 **CLI routes:**
-- Setup: `python3 bin/main.py --setup`
-- Process new emails: `python3 bin/main.py --process`
-- Reprocess date range: `python3 bin/main.py --reprocess --from 2026-03-20 --to 2026-03-24`
+- Setup: `.venv/bin/python bin/main.py --setup`
+- Process new emails: `.venv/bin/python bin/main.py --process`
+- Reprocess date range: `.venv/bin/python bin/main.py --reprocess --from 2026-03-20 --to 2026-03-24`
 
 ## When the User Says "Process My Transaction Emails"
 
 Run the processing pipeline:
 ```
-python3 bin/main.py --process
+.venv/bin/python bin/main.py --process
 ```
 This will:
 1. Fetch unseen emails from the configured Gmail inbox
@@ -36,7 +38,7 @@ This will:
 
 Parse the date range and run:
 ```
-python3 bin/main.py --reprocess --from 2026-03-16 --to 2026-03-23
+.venv/bin/python bin/main.py --reprocess --from 2026-03-16 --to 2026-03-23
 ```
 
 ## State
@@ -74,7 +76,7 @@ The user may reply with corrections. Map each to the appropriate finance-tracker
 
 Run finance-tracker commands from the finance-tracker skill directory:
 ```
-cd ../finance-tracker && python3 tracker.py --remove 42
+cd ../finance-tracker && .venv/bin/python tracker.py --remove 42
 ```
 
 ## LLM Parsing Fallback
@@ -86,7 +88,7 @@ If any emails are marked `[LLM PARSING NEEDED]` in the summary:
 4. Extract: amount, merchant, date, description
 5. Use finance-tracker `--add` to insert:
    ```
-   python3 tracker.py --add <amount> <category> "<description>" <YYYY-MM-DD>
+   cd ../finance-tracker && .venv/bin/python tracker.py --add <amount> <category> "<description>" <YYYY-MM-DD>
    ```
 6. Use `--suggest-category` if category is unclear
 
@@ -100,5 +102,5 @@ If the user reports parsing issues, read the latest log file to diagnose.
 
 - If `pending_transactions.json` contains `"status": "error"`, explain the error.
 - If Gmail connection fails, check `state/settings.json` for correct credentials.
-- If finance-tracker insertion fails, verify the DB exists (`python3 tracker.py --init`).
-- Common fix: re-run `python3 bin/main.py --setup` to reset state files.
+- If finance-tracker insertion fails, verify the DB exists (`cd ../finance-tracker && .venv/bin/python tracker.py --init`).
+- Common fix: re-run `.venv/bin/python bin/main.py --setup` to reset state files.

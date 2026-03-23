@@ -113,7 +113,7 @@ def process_emails(settings: dict):
         client.connect()
     except ConnectionError as e:
         logger.error("Gmail connection failed: %s", e)
-        notify_error(str(e))
+        notify_error(str(e), settings)
         return
 
     try:
@@ -204,7 +204,7 @@ def process_emails(settings: dict):
 
     except Exception as e:
         logger.error("Processing failed: %s", e, exc_info=True)
-        notify_error(str(e))
+        notify_error(str(e), settings)
     finally:
         client.disconnect()
 
@@ -280,7 +280,7 @@ def reprocess_emails(settings: dict, from_date: str, to_date: str):
 
     except Exception as e:
         logger.error("Reprocessing failed: %s", e, exc_info=True)
-        notify_error(str(e))
+        notify_error(str(e), settings)
     finally:
         client.disconnect()
 
@@ -443,7 +443,7 @@ def _trigger_summary(candidates: list, settings: dict):
         prompt = (
             "Use the transaction-inbox skill.\n\n"
             "The nightly email processing found **no new transaction emails** to process.\n"
-            "Report this to me on Telegram."
+            "Please acknowledge this natively. Your reply will be automatically delivered."
         )
     else:
         txn_list = "\n".join(txn_lines) if txn_lines else "  (none)"
@@ -462,7 +462,7 @@ The nightly email processing has completed. Here is the summary:
 
 Regex hit rate: {summary.get('parse_stats', {}).get('hit_rate_pct', 0)}%
 
-Please send this summary to me on Telegram. Format it as a clean, readable message.
+Please format this summary as a clean, readable message. Your reply text will be automatically delivered.
 If any items are flagged as probable duplicates, highlight them and ask me to confirm.
 If any items need LLM parsing, read the pending_transactions.json file at {state.STATE_DIR}/pending_transactions.json, extract the transaction details from the email body, and tell me what you found.
 
@@ -475,9 +475,14 @@ I can reply with corrections like:
 """
 
     logger.info("Triggering OpenClaw for Telegram summary")
+    oc_settings = settings.get("openclaw", {})
+    target_args = oc_settings.get("target_args", ["--session-id", "main", "--to", "12345678"])
+    
+    cmd = ["openclaw", "agent"] + target_args + ["--message", prompt, "--deliver"]
+    
     try:
         subprocess.run(
-            ["openclaw", "chat", "--message", prompt],
+            cmd,
             check=True,
             timeout=120,
         )
@@ -490,16 +495,20 @@ I can reply with corrections like:
         logger.error("OpenClaw summary failed: %s", e)
 
 
-def notify_error(error_msg: str):
+def notify_error(error_msg: str, settings: dict):
     """Send error notification via OpenClaw if available."""
     prompt = f"""The transaction-inbox skill encountered an error during processing.
 
 Error: {error_msg}
 
-Please notify me on Telegram about this failure and suggest how to fix it."""
+Please acknowledge this error in a friendly way and suggest how to fix it. Your reply text will be automatically delivered."""
+
+    oc_settings = settings.get("openclaw", {})
+    target_args = oc_settings.get("target_args", ["--session-id", "main", "--to", "12345678"])
+    cmd = ["openclaw", "agent"] + target_args + ["--message", prompt, "--deliver"]
 
     try:
-        subprocess.run(["openclaw", "chat", "--message", prompt], timeout=60)
+        subprocess.run(cmd, timeout=60)
     except Exception as e:
         logger.error("Failed to send error notification: %s", e)
 

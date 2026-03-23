@@ -100,7 +100,13 @@ Edit `state/settings.json`:
     "alerts@hdfcbank.net",
     "donotreply@sbi.co.in",
     "noreply@swiggy.in"
-  ]
+  ],
+  "openclaw": {
+    "target_args": [
+      "--session-id", "main",
+      "--to", "12345678"
+    ]
+  }
 }
 ```
 
@@ -111,6 +117,7 @@ Edit `state/settings.json`:
 | `gmail.email` | Dedicated Gmail address | (required) |
 | `gmail.app_password` | 16-char App Password | (required) |
 | `allowed_senders` | Sender email addresses to process | (pre-filled) |
+| `openclaw.target_args` | Arguments used by `openclaw agent` to target your Telegram | (pre-filled with dummy values) |
 | `dedup.time_window_minutes` | Soft-match time tolerance | `30` |
 | `dedup.amount_tolerance` | Amount tolerance in ₹ | `1.0` |
 | `state.prune_after_days` | Days to keep processed records | `60` |

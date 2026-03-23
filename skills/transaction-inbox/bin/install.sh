@@ -12,7 +12,11 @@ echo "==> Setting up transaction-inbox skill..."
 
 if [ ! -d "$VENV_DIR" ]; then
     echo "    Creating virtualenv at $VENV_DIR"
-    python3 -m venv "$VENV_DIR"
+    if command -v virtualenv >/dev/null 2>&1; then
+        virtualenv "$VENV_DIR"
+    else
+        python3 -m virtualenv "$VENV_DIR"
+    fi
 else
     echo "    Virtualenv already exists at $VENV_DIR"
 fi
