@@ -132,16 +132,16 @@ python3 bin/main.py --process
 
 ### 7. Cron Setup
 
-Add to your crontab (`crontab -e`):
+Use OpenClaw's built-in cron scheduler to run the pipeline automatically.
 
-```cron
-# Process transaction emails at 22:00 daily
-0 22 * * * cd /path/to/skills/transaction-inbox && python3 bin/main.py --process
-```
-
-Or if using the virtualenv:
-```cron
-0 22 * * * cd /path/to/skills/transaction-inbox && .venv/bin/python bin/main.py --process
+```bash
+openclaw cron add \
+  --name "Transaction Inbox Daily" \
+  --cron "0 22 * * *" \
+  --session isolated \
+  --light-context \
+  --no-deliver \
+  --message "~/.openclaw/skills/transaction-inbox/.venv/bin/python ~/.openclaw/skills/transaction-inbox/bin/main.py --process"
 ```
 
 ## Usage
