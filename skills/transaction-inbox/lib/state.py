@@ -52,6 +52,7 @@ DEFAULT_SETTINGS = {
         "noreply@phonepe.com",
         "alerts@hdfcbank.bank.in",
         "credit_cards@icicibank.com",
+        "credit_cards@icici.bank.in"
     ],
     "openclaw": {
         "target_args": ["--session-id", "main", "--to", "12345678"]
