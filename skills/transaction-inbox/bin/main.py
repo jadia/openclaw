@@ -30,8 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from lib import state, gmail_client, parser, dedup
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-LOGS_DIR = BASE_DIR / "state" / "logs"
-LOCK_FILE = BASE_DIR / "state" / ".process_lock"
+LOGS_DIR = state.STATE_DIR / "logs"
+LOCK_FILE = state.STATE_DIR / ".process_lock"
 
 
 # ---------------------------------------------------------------------------
@@ -719,7 +719,7 @@ def main():
     if args.setup:
         setup_logging()
         logger.info("Setup complete")
-        print("transaction-inbox setup complete. Edit state/settings.json to configure Gmail credentials.")
+        print(f"transaction-inbox setup complete. Edit {state.STATE_DIR}/settings.json to configure Gmail credentials.")
         return
 
     # All other modes need logging

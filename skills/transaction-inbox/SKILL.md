@@ -44,7 +44,7 @@ Parse the date range and run (note that `--to` is optional and defaults to today
 
 ## State
 
-All state files live under `state/`:
+All state files live under `~/data/transaction-inbox/state/`:
 - `settings.json` — Gmail credentials, allowed senders, dedup config
 - `processed_emails.json` — checkpoint of processed email IDs
 - `pending_transactions.json` — last run's candidates and summary
@@ -131,7 +131,7 @@ cd ../finance-tracker && .venv/bin/python tracker.py --remove 42
 ## LLM Parsing Fallback
 
 If any emails are marked `[LLM PARSING NEEDED]` in the summary:
-1. Read `state/pending_transactions.json`
+1. Read `~/data/transaction-inbox/state/pending_transactions.json`
 2. Find the candidate with `parse_method: "llm_needed"`
 3. Read its `body_for_llm` field
 4. Extract: amount, merchant, date, description
@@ -143,13 +143,13 @@ If any emails are marked `[LLM PARSING NEEDED]` in the summary:
 
 ## Logs
 
-Daily log files are at `state/logs/run_YYYY-MM-DD.log`.
+Daily log files are at `~/data/transaction-inbox/state/logs/run_YYYY-MM-DD.log`.
 These contain detailed regex hit/miss data, dedup decisions, and error traces.
 If the user reports parsing issues, read the latest log file to diagnose.
 
 ## Error Handling
 
-- If `pending_transactions.json` contains `"status": "error"`, explain the error.
-- If Gmail connection fails, check `state/settings.json` for correct credentials.
+- If `~/data/transaction-inbox/state/pending_transactions.json` contains `"status": "error"`, explain the error.
+- If Gmail connection fails, check `~/data/transaction-inbox/state/settings.json` for correct credentials.
 - If finance-tracker insertion fails, verify the DB exists (`cd ../finance-tracker && .venv/bin/python tracker.py --init`).
 - Common fix: re-run `.venv/bin/python bin/main.py --setup` to reset state files.

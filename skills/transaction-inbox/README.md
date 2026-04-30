@@ -87,7 +87,7 @@ python3 bin/main.py --setup
 
 ### 5. Configuration
 
-Edit `state/settings.json`:
+Edit `~/data/transaction-inbox/state/settings.json`:
 
 ```json
 {
@@ -233,23 +233,23 @@ After processing, OpenClaw sends a Telegram summary. You can reply with:
 
 | File | Purpose | Pruning |
 |:---|:---|:---|
-| `state/settings.json` | Configuration | Never |
-| `state/processed_emails.json` | Processed email IDs, results | After 60 days |
-| `state/pending_transactions.json` | Last run's candidates + summary | Overwritten each run |
-| `state/logs/run_YYYY-MM-DD.log` | Detailed run logs | Manual cleanup |
+| `~/data/transaction-inbox/state/settings.json` | Configuration | Never |
+| `~/data/transaction-inbox/state/processed_emails.json` | Processed email IDs, results | After 60 days |
+| `~/data/transaction-inbox/state/pending_transactions.json` | Last run's candidates + summary | Overwritten each run |
+| `~/data/transaction-inbox/state/logs/run_YYYY-MM-DD.log` | Detailed run logs | Manual cleanup |
 
 ## Troubleshooting
 
 ### Gmail connection fails
-- Verify `state/settings.json` has correct email and app_password
+- Verify `~/data/transaction-inbox/state/settings.json` has correct email and app_password
 - Ensure IMAP is enabled in Gmail settings
 - Check that 2FA is enabled (required for App Passwords)
-- Check `state/logs/` for detailed error messages
+- Check `~/data/transaction-inbox/state/logs/` for detailed error messages
 
 ### Regex not matching an email format
-- Check `state/logs/run_YYYY-MM-DD.log` for `PARSE_MISS` entries
+- Check `~/data/transaction-inbox/state/logs/run_YYYY-MM-DD.log` for `PARSE_MISS` entries
 - The log shows which patterns were tried and why they failed
-- Add custom patterns to `state/settings.json` under `parsing.custom_patterns`
+- Add custom patterns to `~/data/transaction-inbox/state/settings.json` under `parsing.custom_patterns`
 - Or let the LLM fallback handle it
 
 ### Duplicate transactions inserted

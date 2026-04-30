@@ -20,7 +20,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-STATE_DIR = BASE_DIR / "state"
+STATE_DIR = Path.home() / "data" / "transaction-inbox" / "state"
 
 DEFAULT_SETTINGS = {
     "version": 1,
