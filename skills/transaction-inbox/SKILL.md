@@ -52,13 +52,61 @@ All state files live under `state/`:
 
 ## Nightly Summary Review
 
-After processing, a summary is sent via Telegram with numbered transactions:
+After processing, a pre-formatted summary is sent via Telegram with emoji-coded statuses:
 ```
-#1 ₹450.00 — Swiggy (2026-03-23) [new]
-#2 ₹1200.00 — HDFC UPI (2026-03-23) [new]
-#3 ₹450.00 — HDFC Debit (2026-03-23) [auto_merged]
-#4 ₹899.00 — Amazon (2026-03-23) [probable_duplicate]
+📊 Nightly Transaction Summary — 23 Mar 2026
+
+Processed: 4 emails
+✅ New: 2
+🔄 Duplicates skipped: 1
+⚠️ Flagged for review: 1
+
+── New Transactions ──
+  #1 ✅ ₹450.00 — Swiggy (2026-03-23)
+  #2 ✅ ₹1200.00 — HDFC UPI (2026-03-23)
+
+── ⚠️ Needs Your Review ──
+  #4 ⚠️ ₹899.00 — Amazon (2026-03-23)
+      ↳ Possible match with ledger #42
+
+── Duplicates Skipped ──
+  #3 🔄 ₹450.00 — HDFC Debit (2026-03-23)
+      ↳ Merged with ledger #38
+
+💬 Quick Actions:
+  "delete #N" — remove a transaction
+  "change #N amount to X" — fix amount
+  "recategorise #N to X" — change category
+  "confirm all" — accept everything
 ```
+
+## Dedup Logic Reference
+
+The dedup system uses a two-stage approach. When investigating or explaining dedup decisions to the user, reference these rules:
+
+### Stage 1 — Hard Match (Reference IDs)
+If UTR, order_id, ref_no, or booking_id matches a recently processed email → `definite_duplicate` → skip.
+
+### Stage 2 — Soft Match (Scoring v2)
+
+| Criteria | Score | Notes |
+|:---|:---|:---|
+| Amount match (±₹1) | +2.0 | Core signal |
+| Merchant fuzzy match | +1.0 | Substring match |
+| Direction match | +0.5 | debit-vs-debit is common |
+| Time within 30 min | +1.5 | Strongest non-ID signal |
+| Date gap > 2h | −1.0 | Penalty |
+| Date gap > 24h | −2.0 | Severe penalty |
+| Date gap > 48h | Reject | Configurable via `dedup.max_date_gap_hours` |
+
+**Thresholds:** auto_merged ≥ 4.5 · probable_duplicate ≥ 3.5
+
+### Examples
+
+1. **₹80 Equitas, same merchant, 5 min apart** → `2+1+0.5+1.5 = 5.0` → auto_merged ✓
+2. **₹80 Equitas, same merchant, 3 days apart** → rejected by 48h cutoff → new ✓
+3. **₹500 Swiggy + ₹500 Zomato, same time** → `2+0+0.5+1.5 = 4.0` → probable_duplicate
+4. **₹499 Netflix, 30 days apart** → rejected by 48h cutoff → new ✓
 
 ## Review & Correction Commands
 

@@ -180,11 +180,44 @@ This re-fetches all emails in the range regardless of Seen status. Dedup against
 **Stage 1 — Hard match:**
 Strong identifiers (UTR, order_id, ref_no, booking_id) are compared against recently processed emails. If any match → definite duplicate, skipped.
 
-**Stage 2 — Soft match:**
-Heuristic scoring on: amount (±₹1), merchant (fuzzy), direction, time (±30 min).
-- Score ≥ 4 → auto-merged (higher-detail record kept)
-- Score ≥ 3 → probable duplicate (flagged for review)
-- Score < 3 → new transaction
+**Stage 2 — Soft match (v2):**
+Heuristic scoring with date-gap penalties to prevent false positives:
+
+| Criteria | Score | Notes |
+|:---|:---|:---|
+| Amount match (±₹1) | +2.0 | Core signal |
+| Merchant/description fuzzy match | +1.0 | Substring matching |
+| Direction match (debit/credit) | +0.5 | Reduced — debit is almost always the case |
+| Time within window (±30 min) | +1.5 | Strongest non-ID signal |
+| Date gap > 2 hours | −1.0 | Penalty |
+| Date gap > 24 hours | −2.0 | Severe penalty (replaces −1.0) |
+| Date gap > hard cutoff | Reject | Immediate reject, configurable (default 48h) |
+
+**Thresholds:**
+- Score ≥ 4.5 → auto-merged (higher-detail record kept)
+- Score ≥ 3.5 → probable duplicate (flagged for review)
+- Score < 3.5 → new transaction
+
+#### Dedup Examples
+
+**1. Same transaction reported twice** (bank alert + UPI app notification, same UTR):
+- Hard match on UTR → `definite_duplicate` → skipped entirely
+
+**2. Same amount, same merchant, 5 min apart** (duplicate email for same ₹80 payment):
+- `amount(+2) + merchant(+1) + direction(+0.5) + time_within_5min(+1.5) = 5.0` → `auto_merged` ✓
+
+**3. Same amount, same merchant, 3 days apart** (two separate ₹80 payments):
+- `amount(+2) + merchant(+1) + direction(+0.5) + date_gap_72h(−2) = 1.5` → **not a duplicate** ✓
+- If hard cutoff is set to 48h, the match is immediately rejected before scoring.
+
+**4. Same amount, different merchant, same time** (₹500 to Swiggy and ₹500 to Zomato at same time):
+- `amount(+2) + merchant(0) + direction(+0.5) + time_match(+1.5) = 4.0` → `probable_duplicate` (flagged for review)
+
+**5. Different amount, same merchant, same time** (₹450 and ₹800 from HDFC):
+- `amount(0) + merchant(+1) + direction(+0.5) + time_match(+1.5) = 3.0` → **not a duplicate** ✓
+
+**6. Recurring subscription** (₹499 Netflix, same merchant, 30 days apart):
+- Immediately rejected by 48h hard cutoff → **not a duplicate** ✓
 
 ### Review & Correction Flow
 

@@ -14,6 +14,7 @@ All operations are heavily logged to daily log files under state/logs/.
 """
 
 import argparse
+import fcntl
 import json
 import logging
 import os
@@ -30,6 +31,7 @@ from lib import state, gmail_client, parser, dedup
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 LOGS_DIR = BASE_DIR / "state" / "logs"
+LOCK_FILE = BASE_DIR / "state" / ".process_lock"
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +76,39 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Lockfile to prevent concurrent runs (avoids double Telegram messages)
+# ---------------------------------------------------------------------------
+
+def _acquire_lock():
+    """Acquire an exclusive file lock. Returns the lock fd or None if locked."""
+    try:
+        lock_fd = open(LOCK_FILE, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_fd.write(str(os.getpid()))
+        lock_fd.flush()
+        logger.debug("Process lock acquired (pid=%d)", os.getpid())
+        return lock_fd
+    except (IOError, OSError):
+        logger.warning(
+            "Another process is already running (lockfile: %s). Exiting.",
+            LOCK_FILE,
+        )
+        return None
+
+
+def _release_lock(lock_fd):
+    """Release the file lock."""
+    if lock_fd:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+            LOCK_FILE.unlink(missing_ok=True)
+            logger.debug("Process lock released")
+        except Exception as e:
+            logger.warning("Error releasing lock: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # Process: fetch → filter → parse → dedup → insert → summary
 # ---------------------------------------------------------------------------
 
@@ -82,15 +117,32 @@ def process_emails(settings: dict):
     Main processing pipeline for new/unseen emails.
 
     Steps:
-      1. Connect to Gmail
-      2. Fetch UNSEEN emails
-      3. Filter by allowed senders
-      4. Parse transaction details
-      5. Deduplicate
-      6. Insert into finance-tracker
-      7. Record state
-      8. Send Telegram summary via OpenClaw
+      1. Acquire lockfile (prevent concurrent runs)
+      2. Connect to Gmail
+      3. Fetch UNSEEN emails
+      4. Filter by allowed senders
+      5. Parse transaction details
+      6. Deduplicate
+      7. Insert into finance-tracker
+      8. Record state
+      9. Send Telegram summary via OpenClaw
     """
+    lock_fd = _acquire_lock()
+    if lock_fd is None:
+        print(json.dumps({
+            "status": "error",
+            "message": "Another processing run is in progress. Skipping.",
+        }))
+        return
+
+    try:
+        _process_emails_locked(settings)
+    finally:
+        _release_lock(lock_fd)
+
+
+def _process_emails_locked(settings: dict):
+    """Inner processing logic, called while holding the lockfile."""
     gmail_cfg = settings.get("gmail", {})
     if not gmail_cfg.get("email") or not gmail_cfg.get("app_password"):
         logger.error("Gmail credentials not configured in state/settings.json")
@@ -437,77 +489,166 @@ def _build_summary(candidates: list, parse_stats: dict) -> dict:
     return summary
 
 
+# ---------------------------------------------------------------------------
+# Telegram summary formatting (pre-formatted in Python)
+# ---------------------------------------------------------------------------
+
+_STATUS_EMOJI = {
+    "new": "✅",
+    "auto_merged": "🔄",
+    "probable_duplicate": "⚠️",
+    "definite_duplicate": "🚫",
+    "llm_needed": "🔍",
+}
+
+
+def _format_telegram_summary(candidates: list, summary: dict) -> str:
+    """
+    Build a clean, pre-formatted Telegram message from processed candidates.
+
+    Message structure:
+      1. Header with date
+      2. Stats overview
+      3. New transactions (grouped)
+      4. Flagged probable duplicates (grouped, if any)
+      5. Skipped duplicates (grouped, if any)
+      6. LLM parsing needed (if any)
+      7. Action prompts
+    """
+    today = datetime.now().strftime("%d %b %Y")
+
+    if not candidates:
+        return f"📭 Nightly Scan ({today}) — No new transaction emails found."
+
+    lines = [f"📊 Nightly Transaction Summary — {today}"]
+    lines.append("")
+
+    # --- Stats overview ---
+    total = summary.get("total_emails_processed", len(candidates))
+    inserted = summary.get("inserted", 0)
+    dups = summary.get("duplicates_skipped", 0)
+    flagged = summary.get("probable_duplicates_flagged", 0)
+    llm_count = summary.get("llm_parsing_needed", 0)
+
+    lines.append(f"Processed: {total} emails")
+    if inserted:
+        lines.append(f"✅ New: {inserted}")
+    if dups:
+        lines.append(f"🔄 Duplicates skipped: {dups}")
+    if flagged:
+        lines.append(f"⚠️ Flagged for review: {flagged}")
+    if llm_count:
+        lines.append(f"🔍 Need manual parsing: {llm_count}")
+    lines.append("")
+
+    # --- Group transactions by status ---
+    new_txns = []
+    flagged_txns = []
+    skipped_txns = []
+    llm_txns = []
+
+    for i, c in enumerate(candidates, 1):
+        txn = c.get("transaction", {})
+        status = c.get("dedup_status", "?")
+        emoji = _STATUS_EMOJI.get(status, "❓")
+
+        if c.get("parse_method") == "llm_needed":
+            llm_txns.append(
+                f"  #{i} 🔍 from={c.get('from', '?')} "
+                f"subject={c.get('subject', '?')[:60]}"
+            )
+            continue
+
+        if not txn:
+            continue
+
+        amount = txn.get("amount", 0)
+        merchant = txn.get("merchant", "Unknown")
+        date = txn.get("transaction_date", "?")
+        line = f"  #{i} {emoji} ₹{amount:.2f} — {merchant} ({date})"
+
+        if status == "new":
+            new_txns.append(line)
+        elif status == "probable_duplicate":
+            match_id = c.get("probable_match_ledger_id", "?")
+            flagged_txns.append(f"{line}\n      ↳ Possible match with ledger #{match_id}")
+        elif status in ("auto_merged", "definite_duplicate"):
+            merged_id = c.get("merged_with_ledger_id", "?")
+            skipped_txns.append(f"{line}\n      ↳ Merged with ledger #{merged_id}")
+
+    if new_txns:
+        lines.append("── New Transactions ──")
+        lines.extend(new_txns)
+        lines.append("")
+
+    if flagged_txns:
+        lines.append("── ⚠️ Needs Your Review ──")
+        lines.extend(flagged_txns)
+        lines.append("")
+
+    if skipped_txns:
+        lines.append("── Duplicates Skipped ──")
+        lines.extend(skipped_txns)
+        lines.append("")
+
+    if llm_txns:
+        lines.append("── 🔍 Manual Parsing Needed ──")
+        lines.extend(llm_txns)
+        lines.append("")
+
+    # --- Action prompts ---
+    if flagged_txns or new_txns:
+        lines.append("💬 Quick Actions:")
+        lines.append('  "delete #N" — remove a transaction')
+        lines.append('  "change #N amount to X" — fix amount')
+        lines.append('  "recategorise #N to X" — change category')
+        lines.append('  "confirm all" — accept everything')
+
+    return "\n".join(lines)
+
+
 def _trigger_summary(candidates: list, settings: dict):
     """
-    Trigger OpenClaw to send a Telegram summary of processed transactions.
+    Format and deliver a Telegram summary via OpenClaw.
 
-    Uses `openclaw chat --message` to deliver the summary.
+    The message is pre-formatted in Python. The prompt to OpenClaw is
+    delivery-only — no skill references, no command instructions —
+    to prevent the LLM agent from re-triggering the processing pipeline.
     """
     pending = state.load_pending()
     summary = pending.get("summary", {})
 
-    # Build human-readable transaction list
-    txn_lines = []
-    for i, c in enumerate(candidates, 1):
-        txn = c.get("transaction", {})
-        status = c.get("dedup_status", "?")
-        if txn:
-            amount = txn.get("amount", 0)
-            merchant = txn.get("merchant", "Unknown")
-            date = txn.get("transaction_date", "?")
-            desc = txn.get("description", "")
-            txn_lines.append(
-                f"  #{i} ₹{amount:.2f} — {merchant} ({date}) [{status}]"
-                f"\n      {desc}"
-            )
-        elif c.get("parse_method") == "llm_needed":
-            txn_lines.append(
-                f"  #{i} [LLM PARSING NEEDED] from={c.get('from', '?')} "
-                f"subject={c.get('subject', '?')[:60]}"
-            )
+    # Format the message entirely in Python
+    formatted_message = _format_telegram_summary(candidates, summary)
 
-    # Build prompt for OpenClaw
-    if not candidates:
-        prompt = (
-            "Use the transaction-inbox skill.\n\n"
-            "The nightly email processing found **no new transaction emails** to process.\n"
-            "Please acknowledge this natively. Your reply will be automatically delivered."
+    # Build a delivery-only prompt — explicitly forbid running commands
+    prompt = (
+        "IMPORTANT: Do NOT run any commands, scripts, or tools. "
+        "Do NOT use the transaction-inbox skill or any other skill. "
+        "Simply deliver the following pre-formatted message exactly as-is. "
+        "You may add a brief, friendly greeting before it, but do not "
+        "modify the content or run any processing.\n\n"
+        f"{formatted_message}"
+    )
+
+    # Handle LLM parsing items separately — only if there are any
+    llm_items = [c for c in candidates if c.get("parse_method") == "llm_needed"]
+    if llm_items:
+        prompt += (
+            f"\n\nAdditionally, {len(llm_items)} email(s) could not be parsed "
+            f"automatically. After delivering the summary above, read the file "
+            f"at {state.STATE_DIR}/pending_transactions.json to find candidates "
+            f"with parse_method='llm_needed'. Extract the transaction details "
+            f"(amount, merchant, date) from their body_for_llm field and "
+            f"include what you found in your response."
         )
-    else:
-        txn_list = "\n".join(txn_lines) if txn_lines else "  (none)"
-        prompt = f"""Use the transaction-inbox skill.
-
-The nightly email processing has completed. Here is the summary:
-
-**Processed:** {summary.get('total_emails_processed', 0)} emails
-**Inserted:** {summary.get('inserted', 0)} new transactions
-**Duplicates skipped:** {summary.get('duplicates_skipped', 0)}
-**Probable duplicates (flagged):** {summary.get('probable_duplicates_flagged', 0)}
-**LLM parsing needed:** {summary.get('llm_parsing_needed', 0)}
-
-**Transactions:**
-{txn_list}
-
-Regex hit rate: {summary.get('parse_stats', {}).get('hit_rate_pct', 0)}%
-
-Please format this summary as a clean, readable message. Your reply text will be automatically delivered.
-If any items are flagged as probable duplicates, highlight them and ask me to confirm.
-If any items need LLM parsing, read the pending_transactions.json file at {state.STATE_DIR}/pending_transactions.json, extract the transaction details from the email body, and tell me what you found.
-
-I can reply with corrections like:
-- "delete #3" → use finance-tracker --remove
-- "change #5 amount to 450" → use finance-tracker --query-write
-- "recategorise #2 to Junk" → use finance-tracker --update-category
-- "merge #4 and #6" → remove one and keep the other
-- "confirm all" → no action needed
-"""
 
     logger.info("Triggering OpenClaw for Telegram summary")
     oc_settings = settings.get("openclaw", {})
     target_args = oc_settings.get("target_args", ["--session-id", "main", "--to", "12345678"])
-    
+
     cmd = ["openclaw", "agent"] + target_args + ["--message", prompt, "--deliver"]
-    
+
     try:
         subprocess.run(
             cmd,

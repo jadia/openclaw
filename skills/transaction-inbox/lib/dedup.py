@@ -2,11 +2,25 @@
 dedup.py — Two-stage duplicate detection for transaction candidates.
 
 Stage 1 (Hard match): Reference ID comparison (UTR, order_id, ref_no, etc.)
-Stage 2 (Soft match): Amount + merchant + time window heuristic
+Stage 2 (Soft match): Amount + merchant + time window heuristic with
+                       date-gap penalties to prevent false positives.
 
 Also handles within-batch dedup (multiple emails for same transaction in
 one processing run) and against-ledger dedup (comparing with recent
 finance-tracker entries).
+
+Scoring system (v2):
+  Amount match (±₹1):       +2.0
+  Merchant/desc fuzzy:      +1.0
+  Direction match:          +0.5  (reduced — debit is almost always the case)
+  Time within window:       +1.5  (increased — strongest non-ID signal)
+  Date gap >2h:             −1.0  (penalty)
+  Date gap >24h:            −2.0  (penalty — replaces the −1.0)
+  Date gap >hard_cutoff:    immediate reject (configurable, default 48h)
+
+Thresholds:
+  auto_merged:              score ≥ 4.5
+  probable_duplicate:       score ≥ 3.5
 """
 
 import json
@@ -62,32 +76,106 @@ def _hard_match(candidate_refs: dict, known_refs: dict) -> bool:
 # Stage 2: Soft match (heuristic)
 # ---------------------------------------------------------------------------
 
+# Default scoring weights
+_SCORE_AMOUNT_MATCH = 2.0
+_SCORE_MERCHANT_MATCH = 1.0
+_SCORE_DIRECTION_MATCH = 0.5
+_SCORE_TIME_MATCH = 1.5
+_PENALTY_DATE_GAP_2H = -1.0
+_PENALTY_DATE_GAP_24H = -2.0
+
+# Default thresholds
+_THRESHOLD_AUTO_MERGE = 4.5
+_THRESHOLD_PROBABLE = 3.5
+
+# Default hard cutoff (hours) — configurable via settings
+_DEFAULT_MAX_DATE_GAP_HOURS = 48
+
+
 def _soft_match(
     candidate: dict,
     existing: dict,
     time_window_minutes: int = 30,
     amount_tolerance: float = 1.0,
+    max_date_gap_hours: int = _DEFAULT_MAX_DATE_GAP_HOURS,
 ) -> str:
     """
     Heuristic duplicate check using amount, merchant, direction, and time.
+
+    Scoring (v2):
+      Amount match (±tolerance):    +2.0
+      Merchant fuzzy match:         +1.0
+      Direction match:              +0.5
+      Time within window:           +1.5
+      Date gap >2h:                 −1.0  (penalty)
+      Date gap >24h:                −2.0  (replaces −1.0)
+      Date gap >max_date_gap_hours: immediate reject
+
+    Thresholds:
+      auto_merged:       score ≥ 4.5
+      probable_duplicate: score ≥ 3.5
+
+    Examples:
+      ₹80 + same merchant + same direction + same time  = 2+1+0.5+1.5 = 5.0 → auto_merged ✓
+      ₹80 + same merchant + same direction + 3 days gap = 2+1+0.5−2   = 1.5 → None ✓
+      ₹80 + same merchant + same direction + 5h gap     = 2+1+0.5−1   = 2.5 → None ✓
+      ₹80 + diff merchant + same direction + same time  = 2+0+0.5+1.5 = 4.0 → probable_duplicate
+      Same UTR → handled by hard match, never reaches here
 
     Args:
         candidate: Parsed transaction dict
         existing: Existing transaction/expense dict to compare against
         time_window_minutes: Time tolerance for matching (default ±30 min)
         amount_tolerance: Amount tolerance in ₹ (default ±1)
+        max_date_gap_hours: Hard cutoff — reject if dates are further apart
 
     Returns:
         STATUS_AUTO_MERGED, STATUS_PROBABLE_DUPLICATE, or None (no match)
     """
-    score = 0
+    score = 0.0
     reasons = []
+
+    # --- Parse times first for early rejection ---
+    cand_time = _parse_time(candidate.get("transaction_date"))
+    exist_time = _parse_time(existing.get("transaction_date"))
+
+    if cand_time and exist_time:
+        delta_minutes = abs((cand_time - exist_time).total_seconds()) / 60
+        delta_hours = delta_minutes / 60
+
+        # Hard cutoff: reject immediately if dates are too far apart
+        if delta_hours > max_date_gap_hours:
+            logger.debug(
+                "DEDUP_SOFT_REJECT reason=date_gap_exceeds_%dh "
+                "gap=%.1fh candidate_date=%s existing_date=%s",
+                max_date_gap_hours, delta_hours,
+                candidate.get("transaction_date"),
+                existing.get("transaction_date"),
+            )
+            return None
+
+        # Time proximity scoring
+        if delta_minutes <= time_window_minutes:
+            score += _SCORE_TIME_MATCH
+            reasons.append(f"time_within_{int(delta_minutes)}min")
+        elif delta_hours > 24:
+            score += _PENALTY_DATE_GAP_24H
+            reasons.append(f"date_gap_{delta_hours:.0f}h_PENALTY")
+        elif delta_hours > 2:
+            score += _PENALTY_DATE_GAP_2H
+            reasons.append(f"date_gap_{delta_hours:.1f}h_penalty")
+        # else: between 30min and 2h — no bonus, no penalty
+    else:
+        # If we can't parse dates, we can't trust the match at all.
+        # Apply a moderate penalty instead of silently ignoring.
+        score += _PENALTY_DATE_GAP_2H
+        reasons.append("date_unknown_penalty")
 
     # --- Amount comparison ---
     cand_amount = candidate.get("amount", 0)
     exist_amount = existing.get("amount", 0)
     if abs(cand_amount - exist_amount) <= amount_tolerance:
-        score += 2
+        score += _SCORE_AMOUNT_MATCH
         reasons.append(f"amount_match({cand_amount}≈{exist_amount})")
 
     # --- Merchant comparison (fuzzy) ---
@@ -95,44 +183,35 @@ def _soft_match(
     exist_merchant = (existing.get("merchant") or existing.get("description") or "").lower().strip()
     if cand_merchant and exist_merchant:
         if cand_merchant in exist_merchant or exist_merchant in cand_merchant:
-            score += 1
+            score += _SCORE_MERCHANT_MATCH
             reasons.append(f"merchant_fuzzy({cand_merchant}~{exist_merchant})")
 
     # --- Direction comparison ---
     cand_dir = candidate.get("direction", "debit")
     exist_dir = existing.get("direction", "debit")
     if cand_dir == exist_dir:
-        score += 1
+        score += _SCORE_DIRECTION_MATCH
         reasons.append("direction_match")
-
-    # --- Time proximity ---
-    cand_time = _parse_time(candidate.get("transaction_date"))
-    exist_time = _parse_time(existing.get("transaction_date"))
-    if cand_time and exist_time:
-        delta = abs((cand_time - exist_time).total_seconds()) / 60
-        if delta <= time_window_minutes:
-            score += 1
-            reasons.append(f"time_within_{int(delta)}min")
 
     # --- Determine result ---
     reason_str = ", ".join(reasons) if reasons else "no_criteria_met"
 
-    if score >= 4:
+    if score >= _THRESHOLD_AUTO_MERGE:
         logger.info(
-            "DEDUP_SOFT_MATCH result=auto_merged score=%d reasons=[%s]",
+            "DEDUP_SOFT_MATCH result=auto_merged score=%.1f reasons=[%s]",
             score, reason_str,
         )
         return STATUS_AUTO_MERGED
 
-    if score >= 3:
+    if score >= _THRESHOLD_PROBABLE:
         logger.info(
-            "DEDUP_SOFT_MATCH result=probable_duplicate score=%d reasons=[%s]",
+            "DEDUP_SOFT_MATCH result=probable_duplicate score=%.1f reasons=[%s]",
             score, reason_str,
         )
         return STATUS_PROBABLE_DUPLICATE
 
     logger.debug(
-        "DEDUP_SOFT_NO_MATCH score=%d reasons=[%s]", score, reason_str,
+        "DEDUP_SOFT_NO_MATCH score=%.1f reasons=[%s]", score, reason_str,
     )
     return None
 
@@ -185,7 +264,7 @@ def _query_recent_ledger(settings: dict, days: int = 7) -> list:
 
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     sql = (
-        f"SELECT id, amount, category, description, transaction_date "
+        f"SELECT id, amount, category, description, transaction_date, inserted_on "
         f"FROM expenses WHERE transaction_date >= '{cutoff}' "
         f"AND deleted_at IS NULL ORDER BY transaction_date DESC"
     )
@@ -242,6 +321,7 @@ def deduplicate_batch(
     dedup_config = settings.get("dedup", {})
     time_window = dedup_config.get("time_window_minutes", 30)
     amount_tolerance = dedup_config.get("amount_tolerance", 1.0)
+    max_date_gap_hours = dedup_config.get("max_date_gap_hours", _DEFAULT_MAX_DATE_GAP_HOURS)
 
     # Fetch recent ledger entries for cross-checking
     ledger_entries = _query_recent_ledger(settings)
@@ -274,7 +354,9 @@ def deduplicate_batch(
         # --- Stage 2a: Soft match against ledger ---
         matched_ledger = False
         for entry in ledger_entries:
-            status = _soft_match(txn, entry, time_window, amount_tolerance)
+            status = _soft_match(
+                txn, entry, time_window, amount_tolerance, max_date_gap_hours,
+            )
             if status == STATUS_AUTO_MERGED:
                 candidate["dedup_status"] = STATUS_AUTO_MERGED
                 candidate["merged_with_ledger_id"] = entry.get("id")
@@ -294,7 +376,9 @@ def deduplicate_batch(
         # --- Stage 2b: Within-batch dedup ---
         matched_batch = False
         for j, (prev_idx, prev_txn) in enumerate(batch_seen):
-            status = _soft_match(txn, prev_txn, time_window, amount_tolerance)
+            status = _soft_match(
+                txn, prev_txn, time_window, amount_tolerance, max_date_gap_hours,
+            )
             if status in (STATUS_AUTO_MERGED, STATUS_PROBABLE_DUPLICATE):
                 # Keep the one with more reference IDs
                 prev_refs = prev_txn.get("reference_ids", {})
